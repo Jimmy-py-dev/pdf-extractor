@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Extractor Demo</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>
+                <i class="fas fa-file-pdf"></i>
+                PDF Text & Table Extractor
+            </h1>
+            <p>Upload any PDF to instantly extract text content and tables</p>
+        </div>
+
+        <div class="content">
+            <form id="uploadForm" enctype="multipart/form-data">
+                <div class="upload-area" id="uploadArea">
+                    <input type="file" name="pdf" accept=".pdf" id="pdfInput" class="file-input" required>
+                    <label for="pdfInput" class="file-label">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        Choose PDF File
+                    </label>
+                    <div class="file-name" id="fileName">No file chosen</div>
+                    
+                    <button type="submit" class="submit-btn" id="submitBtn" disabled>
+                        <i class="fas fa-magic"></i>
+                        Extract Data
+                    </button>
+                </div>
+            </form>
+
+            <div id="loading" class="loading" style="display: none;">
+                <div class="loading-spinner"></div>
+                <h3>Processing Your PDF</h3>
+                <p>Extracting text and tables...</p>
+            </div>
+
+            <div id="results" class="results" style="display: none;">
+                <div class="summary" id="summary"></div>
+                
+                <div class="section">
+                    <h3><i class="fas fa-align-left"></i> Extracted Text</h3>
+                    <div id="textOutput" class="text-output"></div>
+                </div>
+
+                <div class="section">
+                    <h3><i class="fas fa-table"></i> Extracted Tables</h3>
+                    <div id="tablesOutput"></div>
+                </div>
+            </div>
+
+            <div id="error" class="error" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script>
+        // File input handling
+        document.getElementById('pdfInput').addEventListener('change', function(e) {
+            const fileName = this.files[0] ? this.files[0].name : 'No file chosen';
+            document.getElementById('fileName').textContent = fileName;
+            document.getElementById('submitBtn').disabled = !this.files[0];
+        });
+
+        // Drag and drop support
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('pdfInput');
+
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            uploadArea.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            uploadArea.addEventListener(eventName, () => uploadArea.classList.add('dragover'), false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            uploadArea.addEventListener(eventName, () => uploadArea.classList.remove('dragover'), false);
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            const files = e.dataTransfer.files;
+            fileInput.files = files;
+            
+            const fileName = files[0] ? files[0].name : 'No file chosen';
+            document.getElementById('fileName').textContent = fileName;
+            document.getElementById('submitBtn').disabled = !files[0];
+        });
+
+        // Form submission
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const fileInput = document.getElementById('pdfInput');
+            if (!fileInput.files[0]) {
+                showError('Please select a PDF file first');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('pdf', fileInput.files[0]);
+            
+            // Show loading, hide other sections
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+            document.getElementById('error').style.display = 'none';
+            
+            try {
+                const response = await fetch('/extract', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    displayResults(data);
+                } else {
+                    showError(data.error || 'Extraction failed');
+                }
+            } catch (error) {
+                showError('Network error: ' + error.message);
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        });
+        
+        function displayResults(data) {
+            // Store tables data for export
+            window.currentTables = data.tables;
+            
+            // Update summary
+            document.getElementById('summary').innerHTML = `
+                <div class="summary-item">
+                    <div class="summary-value">${data.extraction_mode.toUpperCase()}</div>
+                    <div class="summary-label">PDF Type</div>
+                </div>
+                <div class="summary-item">
+                    <div class="summary-value">${data.text_length}</div>
+                    <div class="summary-label">Characters</div>
+                </div>
+                <div class="summary-item">
+                    <div class="summary-value">${data.table_count}</div>
+                    <div class="summary-label">Tables Found</div>
+                </div>
+            `;
+            
+            // Display text
+            const textOutput = document.getElementById('textOutput');
+            if (data.text && data.text.trim()) {
+                textOutput.textContent = data.text;
+                textOutput.style.display = 'block';
+            } else {
+                textOutput.innerHTML = '<div class="no-data">No text could be extracted from this PDF</div>';
+            }
+            
+            // Display tables
+            const tablesOutput = document.getElementById('tablesOutput');
+            if (data.tables && data.tables.length > 0) {
+                let tablesHTML = '';
+                
+                // Add export all button if multiple tables
+                if (data.tables.length > 1) {
+                    tablesHTML += `
+                        <div class="export-buttons" style="margin-bottom: 20px;">
+                            <button class="export-btn excel-btn" onclick="exportAllTables()">
+                                <i class="fas fa-file-excel"></i>
+                                Export All Tables to Excel
+                            </button>
+                        </div>
+                    `;
+                }
+                
+                data.tables.forEach((table, tableIndex) => {
+                    tablesHTML += `
+                        <div class="table-container">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                                <h4>Table ${tableIndex + 1} (${table.length} rows)</h4>
+                                <div class="export-buttons">
+                                    <button class="export-btn excel-btn" onclick="exportTable(${tableIndex}, 'excel')">
+                                        <i class="fas fa-file-excel"></i>
+                                        Excel
+                                    </button>
+                                    <button class="export-btn csv-btn" onclick="exportTable(${tableIndex}, 'csv')">
+                                        <i class="fas fa-file-csv"></i>
+                                        CSV
+                                    </button>
+                                </div>
+                            </div>
+                            <table>
+                                <thead>
+                                    ${table[0].map(cell => `<th>${cell || ''}</th>`).join('')}
+                                </thead>
+                                <tbody>
+                                    ${table.slice(1).map(row => `
+                                        <tr>
+                                            ${row.map(cell => `<td>${cell || ''}</td>`).join('')}
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    `;
+                });
+                tablesOutput.innerHTML = tablesHTML;
+            } else {
+                tablesOutput.innerHTML = `
+                    <div class="no-data">
+                        <i class="fas fa-info-circle"></i><br>
+                        No tables found<br>
+                        <small>Table extraction is only available for digital PDFs. Scanned PDFs only support text extraction.</small>
+                    </div>
+                `;
+            }
+            
+            document.getElementById('results').style.display = 'block';
+        }
+        
+        // Export functions - these call your DataExporter through Flask endpoints
+        async function exportTable(tableIndex, format) {
+            try {
+                const response = await fetch('/export', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        table_index: tableIndex,
+                        format: format,
+                        tables: window.currentTables
+                    })
+                });
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    a.download = `table_${tableIndex + 1}.${format === 'excel' ? 'xlsx' : 'csv'}`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                } else {
+                    const errorData = await response.json();
+                    showError(`Export failed: ${errorData.error}`);
+                }
+            } catch (error) {
+                showError('Export error: ' + error.message);
+            }
+        }
+        
+        async function exportAllTables() {
+            try {
+                const response = await fetch('/export_all', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        tables: window.currentTables
+                    })
+                });
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    a.download = 'all_tables.xlsx';
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                } else {
+                    const errorData = await response.json();
+                    showError(`Export failed: ${errorData.error}`);
+                }
+            } catch (error) {
+                showError('Export error: ' + error.message);
+            }
+        }
+        
+        function showError(message) {
+            const errorDiv = document.getElementById('error');
+            errorDiv.innerHTML = `
+                <i class="fas fa-exclamation-triangle"></i>
+                <strong>Error:</strong> ${message}
+            `;
+            errorDiv.style.display = 'block';
+        }
+
+        // Prevent form submission on Enter key
+        document.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+            }
+        });
+    </script>
+</body>
+</html>
